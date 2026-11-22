@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <windows.h>
+#include <cmath>
 
 // Структура для движущейся платформы
 struct MovingPlatform {
@@ -18,15 +19,30 @@ struct Enemy {
     sf::RectangleShape shape;
     float speed = 2.f;
     float minX, maxX;
-    int platformIndex = -1; // Индекс платформы, на которой сидит враг (-1 если на земле)
+    int platformIndex = -1;
     bool onMovingPlatform = false;
+
+    int leaderIndex = -1;
+    float proportion = 1.0f;
+    float startX = 0.f;
+
+// Добавляем прыжки
+	bool canJump = false;
+	float velocityY = 0.f;
+	float jumpForce = -6.5f;
+	float gravity = 0.5f;
+	float groundY = 610.f;
+	sf::Clock jumpClock;
+	float jumpInterval = 0.8f;
+
 };
 
 // Структура для монетки
 struct Coin {
-    sf::RectangleShape shape;
+    sf::CircleShape shape;
     int platformIndex = -1; // Индекс платформы (-1 если статичная)
     bool onMovingPlatform = false;
+	float spinAngle = 0.f; // Угол вращения для анимации
 };
 
 int main()
@@ -39,8 +55,8 @@ int main()
     sf::RenderWindow window(sf::VideoMode({ 1920, 1080 }), "My First Game");
     window.setFramerateLimit(60);
 
-    // Создаем камеру под размер окна 1920 на 1080
-    sf::View camera(sf::FloatRect({ 0.f, 0.f }, { 1920.f, 1080.f }));
+    // Создаем камеру под размер окна 2100 на 1200
+    sf::View camera(sf::FloatRect({ 0.f, 0.f }, { 2100.f, 1200.f }));
 
     // Автоматически загружаем стандартный шрифт из системы Windows
     sf::Font font;
@@ -176,6 +192,18 @@ int main()
     groundRight.setPosition({ 2300.f, 650.f });
     staticPlatforms.push_back(groundRight);
 
+    // --- ПРАВАЯ ЗЕМЛЯ (ПОСЛЕ ЯМЫ) ---
+    sf::RectangleShape groundFarRight(sf::Vector2f(1700.f, 350.f));
+    groundFarRight.setFillColor(sf::Color(100, 100, 100));
+    groundFarRight.setPosition({ 4000.f, 650.f });
+    staticPlatforms.push_back(groundFarRight);
+
+    // --- ВЫСОКИЙ БАРЬЕР НА ПРАВОЙ СТОРОНЕ (преодолевается только двойным прыжком) ---
+    sf::RectangleShape barrier(sf::Vector2f(30.f, 220.f));
+    barrier.setFillColor(sf::Color(120, 60, 0));
+    barrier.setPosition({ 2600.f, 430.f });
+    staticPlatforms.push_back(barrier);
+
     // Стены (уровень расширен до 4000.f)
     sf::RectangleShape leftWall(sf::Vector2f(20.f, 1000.f));
     leftWall.setFillColor(sf::Color::Transparent);
@@ -214,11 +242,13 @@ int main()
 
     // --- СПИСОК МОНЕТОК ---
     std::vector<Coin> coins;
-    auto addCoin = [&](float x, float y, int pIndex = -1, bool onMoving = false) {
-        sf::RectangleShape cShape(sf::Vector2f(20.f, 20.f));
+    auto addCoin = [&](float x, float y, int pIndex = -1, bool onMoving = false) { 
+        const float radius = 10.f;
+		sf::CircleShape cShape(radius);
         cShape.setFillColor(sf::Color::Yellow);
-        cShape.setPosition({ x, y });
-        coins.push_back({ cShape, pIndex, onMoving });
+		cShape.setOrigin({radius, radius}); // Центрируем монетку
+        cShape.setPosition({ x + radius, y + radius});
+        coins.push_back({ cShape, pIndex, onMoving, 0.f});
         };
 
     addCoin(350.f, 400.f);
@@ -227,29 +257,70 @@ int main()
     addCoin(1000.f, 175.f);
     addCoin(1350.f, 320.f, 1, true);
     addCoin(2500.f, 600.f);
+    addCoin(2750.f, 600.f);
 
     // --- СПИСОК ВРАГОВ ---
     std::vector<Enemy> enemies;
 
+    // Враг №0: Главный патрульный на левой земле
     {
         sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
         eShape.setFillColor(sf::Color::Red);
-        eShape.setPosition({ 500.f, 610.f });
-        enemies.push_back({ eShape, 2.f, 400.f, 700.f, -1, false });
+        eShape.setPosition({ 200.f, 610.f });
+        enemies.push_back({ eShape, 2.f, 200.f, 1850.f, -1, false, -1, 1.0f, 200.f });
     }
 
+    // Враг №1: враг на левой земле у ямы
+    {
+        sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
+        eShape.setFillColor(sf::Color(255, 100, 100));
+        eShape.setPosition({ 1850.f, 610.f });
+        enemies.push_back({ eShape, -2.f, 200.f, 1850.f, -1, false, -1, 1.0f, 1850.f });
+    }
+
+    // Враг №2: центральный враг на левой земле у ямы прыгающий
+    {
+        sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
+        eShape.setFillColor(sf::Color::Red);
+        eShape.setPosition({ 800.f, 610.f });
+        enemies.push_back({ 
+			eShape, 3.f, 200.f, 1850.f, -1, false, -1, 1.0f, 800.f,
+            true, 0.f, -6.5f, 0.5f, 610.f, sf::Clock{}, 0.8f
+            });
+    }
+
+    // Враг №3: На платформе
     {
         sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
         eShape.setFillColor(sf::Color::Red);
         eShape.setPosition({ 650.f, 290.f });
-        enemies.push_back({ eShape, 1.5f, 0.f, 0.f, 0, true });
+        enemies.push_back({ eShape, 1.5f, 0.f, 0.f, 0, true, -1, 1.0f, 650.f });
     }
 
+    // Враг №4: На другой платформе
     {
         sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
         eShape.setFillColor(sf::Color::Red);
         eShape.setPosition({ 1350.f, 320.f });
-        enemies.push_back({ eShape, 1.5f, 0.f, 0.f, 1, true });
+        enemies.push_back({ eShape, 1.5f, 0.f, 0.f, 1, true, -1, 1.0f, 1350.f });
+    }
+
+    // Враг №5: За барьером справа
+    {
+        sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
+        eShape.setFillColor(sf::Color::Red);
+        eShape.setPosition({ 2700.f, 610.f });
+        enemies.push_back({ eShape, 2.f, 2700.f, 3000.f, -1, false, -1, 1.0f, 2700.f });
+    }
+
+    // Враг №6: За барьером справа прыгающий
+    {
+        sf::RectangleShape eShape(sf::Vector2f(40.f, 40.f));
+        eShape.setFillColor(sf::Color::Red);
+        eShape.setPosition({ 3000.f, 610.f });
+        enemies.push_back({ eShape, -2.f, 2700.f, 3000.f, -1, false, -1, 1.0f, 3000.f,
+            true, 0.f, -6.5f, 0.5f, 610.f, sf::Clock{}, 0.8f
+            });
     }
 
     bool isOnGround = false;
@@ -330,15 +401,30 @@ int main()
                 {
                     auto& mp = movingPlatforms[coin.platformIndex];
                     sf::FloatRect pBounds = mp.shape.getGlobalBounds();
-                    coin.shape.setPosition({ coin.shape.getPosition().x, pBounds.position.y - coin.shape.getSize().y - 5.f });
+					float coinDiametr = coin.shape.getRadius() * 2.f;
+                    coin.shape.setPosition({ coin.shape.getPosition().x, pBounds.position.y - coin.shape.getRadius() - 5.f });
                     coin.shape.move({ mp.isVertical ? 0.f : mp.speed, 0.f });
                 }
+
+                coin.spinAngle += 0.08f;
+				float scaleX = std::cos(coin.spinAngle);
+                coin.shape.setScale({ scaleX, 1.f });
             }
 
             // --- ЛОГИКА ДВИЖЕНИЯ ВРАГОВ ---
-            for (auto& enemy : enemies)
+            for (size_t i = 0; i < enemies.size(); ++i)
             {
-                if (enemy.onMovingPlatform && enemy.platformIndex >= 0 && enemy.platformIndex < movingPlatforms.size())
+                auto& enemy = enemies[i];
+
+                if (enemy.leaderIndex >= 0 && enemy.leaderIndex < enemies.size())
+                {
+                    // Пропорциональное движение относительно главного врага
+                    auto& leader = enemies[enemy.leaderIndex];
+                    float leaderOffset = leader.shape.getPosition().x - leader.startX;
+                    float newX = enemy.startX + leaderOffset * enemy.proportion;
+                    enemy.shape.setPosition({ newX, enemy.shape.getPosition().y });
+                }
+                else if (enemy.onMovingPlatform && enemy.platformIndex >= 0 && enemy.platformIndex < movingPlatforms.size())
                 {
                     auto& mp = movingPlatforms[enemy.platformIndex];
                     sf::FloatRect pBounds = mp.shape.getGlobalBounds();
@@ -365,6 +451,28 @@ int main()
                     if (enemyX <= enemy.minX || enemyX >= enemy.maxX)
                     {
                         enemy.speed = -enemy.speed;
+                    }
+                    if(enemy.canJump)
+                    {
+						bool onGround = (enemy.shape.getPosition().y >= enemy.groundY - 0.1f) && (enemy.velocityY >= 0.f);
+                        if (onGround && enemy.jumpClock.getElapsedTime().asSeconds() >= enemy.jumpInterval)
+                        {
+                            enemy.velocityY = enemy.jumpForce;
+                            enemy.jumpClock.restart();
+                        }
+
+						enemy.velocityY += enemy.gravity;
+						float nextY = enemy.shape.getPosition().y + enemy.velocityY;
+
+                        // Строго ограничиваем по земле, чтобы прыжок оставался стабильным
+                        if (nextY >= enemy.groundY)
+                        {
+							nextY = enemy.groundY;
+							enemy.velocityY = 0.f;
+                        }
+                        
+                            enemy.shape.setPosition({ enemy.shape.getPosition().x, nextY });
+                        
                     }
                 }
             }
@@ -613,26 +721,26 @@ int main()
 
         // --- УПРАВЛЕНИЕ КАМЕРОЙ ---
         float cameraX = player.getPosition().x;
-        if (cameraX < 960.f) cameraX = 960.f;
+        if (cameraX < 1050.f) cameraX = 1050.f;
 
-        float maxCameraX = 4000.f - 960.f;
+        float maxCameraX = 4000.f - 1050.f;
         if (cameraX > maxCameraX) cameraX = maxCameraX;
 
-        camera.setCenter({ cameraX, 430.f });
+        camera.setCenter({ cameraX, 480.f });
         window.setView(camera);
 
         // Обновление интерфейса
         scoreText.setString("Score: " + std::to_string(score));
-        scoreText.setPosition({ camera.getCenter().x - 930.f, camera.getCenter().y - 510.f });
+        scoreText.setPosition({ camera.getCenter().x - 1000.f, camera.getCenter().y - 560.f });
 
         enemyText.setString("Enemies: " + std::to_string(enemiesDefeated));
-        enemyText.setPosition({ camera.getCenter().x - 930.f, camera.getCenter().y - 470.f });
+        enemyText.setPosition({ camera.getCenter().x - 1000.f, camera.getCenter().y - 510.f });
 
         float healthPercent = currentHealth / maxHealth;
         healthBar.setSize(sf::Vector2f(200.f * healthPercent, 20.f));
 
-        healthBarBg.setPosition({ camera.getCenter().x + 700.f, camera.getCenter().y - 510.f });
-        healthBar.setPosition({ camera.getCenter().x + 700.f, camera.getCenter().y - 510.f });
+        healthBarBg.setPosition({ camera.getCenter().x + 750.f, camera.getCenter().y - 560.f });
+        healthBar.setPosition({ camera.getCenter().x + 750.f, camera.getCenter().y - 560.f });
 
         winText.setPosition({ camera.getCenter().x - 150.f, camera.getCenter().y - 40.f });
         gameOverText.setPosition({ camera.getCenter().x - 200.f, camera.getCenter().y - 40.f });
